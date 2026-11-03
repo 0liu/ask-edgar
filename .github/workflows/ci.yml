@@ -1,0 +1,48 @@
+# CI: lint, type-check and test against a throwaway Postgres (SPEC §8).
+# Phase 6 adds, after `make check`: `ask-edgar load --fixture`, `make dbt`, `make evals`.
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: edgar
+          POSTGRES_USER: edgar
+          POSTGRES_PASSWORD: edgar
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U edgar -d edgar"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://edgar:edgar@localhost:5432/edgar
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies (Python from .python-version, versions from uv.lock)
+        run: uv sync --locked
+
+      - name: ruff, mypy --strict, pytest
+        run: make check
