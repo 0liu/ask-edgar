@@ -1,0 +1,15 @@
+version: 2
+
+sources:
+  - name: raw
+    description: SEC Financial Statement Data Sets 2025q1, loaded as-is by `ask-edgar load`.
+    schema: raw
+    tables:
+      - name: sub
+        description: One row per submission (filing).
+      - name: num
+        description: One row per reported number. No primary key (SPEC §4.2).
+      - name: tag
+        description: One row per XBRL tag and taxonomy version.
+      - name: pre
+        description: One row per line on one rendered statement.

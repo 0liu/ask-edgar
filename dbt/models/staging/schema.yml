@@ -1,0 +1,16 @@
+version: 2
+
+models:
+  - name: stg_submissions
+    description: One row per filing, typed and renamed from raw.sub.
+    columns:
+      - name: adsh
+        data_tests: [unique, not_null]
+      - name: cik
+        data_tests: [not_null]
+  - name: stg_numbers
+    description: One row per reported number, renamed from raw.num. Not unique (SPEC §4.2).
+  - name: stg_tags
+    description: One row per (tag, version).
+  - name: stg_presentations
+    description: One row per (adsh, report, line).

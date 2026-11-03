@@ -3,7 +3,7 @@
 -include .env
 export
 
-.PHONY: up down data load dbt check evals evals-live api mcp
+.PHONY: up down data load dbt sanity check evals evals-live api mcp
 
 up:
 	docker compose up -d --wait
@@ -23,6 +23,9 @@ load:
 
 dbt:
 	cd dbt && uv run dbt build
+
+sanity:
+	docker compose exec -T postgres psql -U edgar -d edgar -f - < scripts/sanity.sql
 
 check:
 	uv run ruff check .

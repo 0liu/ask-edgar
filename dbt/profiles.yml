@@ -1,0 +1,15 @@
+# dbt connects with the same DATABASE_URL the loader and the agent use
+# (postgresql://user:password@host:port/dbname). `make dbt` exports it from .env.
+# dbt-postgres takes the parts separately, so they are sliced out of the URL here.
+ask_edgar:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('DATABASE_URL').rsplit('@', 1)[-1].split('/')[0].rsplit(':', 1)[0] }}"
+      port: "{{ (env_var('DATABASE_URL').rsplit('@', 1)[-1].split('/')[0].split(':') + ['5432'])[1] | int }}"
+      user: "{{ env_var('DATABASE_URL').split('://', 1)[1].rsplit('@', 1)[0].split(':', 1)[0] }}"
+      password: "{{ (env_var('DATABASE_URL').split('://', 1)[1].rsplit('@', 1)[0].split(':', 1) + [''])[1] }}"
+      dbname: "{{ env_var('DATABASE_URL').rsplit('@', 1)[-1].split('/', 1)[1].split('?')[0] }}"
+      schema: analytics
+      threads: 4

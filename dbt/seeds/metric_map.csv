@@ -1,0 +1,45 @@
+metric,tag,priority,kind,description
+revenue,Revenues,1,flow,Total revenues for the fiscal year (net sales)
+revenue,RevenueFromContractWithCustomerExcludingAssessedTax,2,flow,Total revenues for the fiscal year (net sales)
+revenue,SalesRevenueNet,3,flow,Total revenues for the fiscal year (net sales)
+revenue,RevenueFromContractWithCustomerIncludingAssessedTax,4,flow,Total revenues for the fiscal year (net sales)
+cost_of_revenue,CostOfRevenue,1,flow,Cost of revenue (cost of goods and services sold)
+cost_of_revenue,CostOfGoodsAndServicesSold,2,flow,Cost of revenue (cost of goods and services sold)
+gross_profit,GrossProfit,1,flow,Gross profit: revenue minus cost of revenue
+r_and_d,ResearchAndDevelopmentExpense,1,flow,Research and development expense
+sga,SellingGeneralAndAdministrativeExpense,1,flow,"Selling, general and administrative expense"
+operating_income,OperatingIncomeLoss,1,flow,Operating income (loss)
+interest_expense,InterestExpense,1,flow,Interest expense
+interest_expense,InterestExpenseNonoperating,2,flow,Interest expense
+pretax_income,IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest,1,flow,Income (loss) before income taxes
+pretax_income,IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments,2,flow,Income (loss) before income taxes
+income_tax,IncomeTaxExpenseBenefit,1,flow,Income tax expense (benefit)
+net_income,NetIncomeLoss,1,flow,Net income (loss) for the fiscal year
+net_income,ProfitLoss,2,flow,Net income (loss) for the fiscal year
+eps_basic,EarningsPerShareBasic,1,per_share,"Basic earnings per share, in USD per share"
+eps_diluted,EarningsPerShareDiluted,1,per_share,"Diluted earnings per share, in USD per share"
+weighted_shares_diluted,WeightedAverageNumberOfDilutedSharesOutstanding,1,flow,Weighted-average diluted shares outstanding during the year
+depreciation,DepreciationDepletionAndAmortization,1,flow,"Depreciation, depletion and amortization expense"
+depreciation,DepreciationAndAmortization,2,flow,"Depreciation, depletion and amortization expense"
+operating_cash_flow,NetCashProvidedByUsedInOperatingActivities,1,flow,Net cash provided by (used in) operating activities
+operating_cash_flow,NetCashProvidedByUsedInOperatingActivitiesContinuingOperations,2,flow,Net cash provided by (used in) operating activities
+investing_cash_flow,NetCashProvidedByUsedInInvestingActivities,1,flow,Net cash provided by (used in) investing activities
+financing_cash_flow,NetCashProvidedByUsedInFinancingActivities,1,flow,Net cash provided by (used in) financing activities
+capex,PaymentsToAcquirePropertyPlantAndEquipment,1,flow,"Capital expenditure: payments to acquire property, plant and equipment"
+dividends_paid,PaymentsOfDividends,1,flow,Cash dividends paid
+dividends_paid,PaymentsOfDividendsCommonStock,2,flow,Cash dividends paid
+cash,CashAndCashEquivalentsAtCarryingValue,1,balance,Cash and cash equivalents at fiscal year end
+cash,CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents,2,balance,Cash and cash equivalents at fiscal year end
+accounts_receivable,AccountsReceivableNetCurrent,1,balance,"Accounts receivable, net, current, at fiscal year end"
+inventory,InventoryNet,1,balance,"Inventory, net, at fiscal year end"
+current_assets,AssetsCurrent,1,balance,Total current assets at fiscal year end
+total_assets,Assets,1,balance,Total assets at fiscal year end
+goodwill,Goodwill,1,balance,Goodwill at fiscal year end
+current_liabilities,LiabilitiesCurrent,1,balance,Total current liabilities at fiscal year end
+long_term_debt,LongTermDebt,1,balance,Long-term debt at fiscal year end
+long_term_debt,LongTermDebtNoncurrent,2,balance,Long-term debt at fiscal year end
+total_liabilities,Liabilities,1,balance,Total liabilities at fiscal year end
+stockholders_equity,StockholdersEquity,1,balance,Total stockholders' equity at fiscal year end
+stockholders_equity,StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest,2,balance,Total stockholders' equity at fiscal year end
+liabilities_and_equity,LiabilitiesAndStockholdersEquity,1,balance,Total liabilities and stockholders' equity (equals total assets)
+shares_outstanding,CommonStockSharesOutstanding,1,balance,Common shares outstanding at fiscal year end

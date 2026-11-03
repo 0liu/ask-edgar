@@ -1,0 +1,30 @@
+name: ask_edgar
+version: "0.1.0"
+config-version: 2
+profile: ask_edgar
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+target-path: target
+clean-targets: [target, dbt_packages]
+
+flags:
+  send_anonymous_usage_stats: false
+
+models:
+  ask_edgar:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table
+
+seeds:
+  ask_edgar:
+    metric_map:
+      +column_types:
+        priority: integer
+    sic_codes:
+      +column_types:
+        sic: integer

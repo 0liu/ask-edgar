@@ -1,0 +1,46 @@
+version: 2
+
+models:
+  - name: dim_company
+    description: One row per CIK, described by its most recent filing in the quarter.
+    columns:
+      - name: cik
+        data_tests: [unique, not_null]
+      - name: name
+        data_tests: [not_null]
+      - name: sic_description
+        description: From the SEC SIC code list seed; null when the filer has no SIC.
+
+  - name: fct_financials
+    description: >
+      One row per (cik, fiscal_year, metric): consolidated annual 10-K figures with
+      the source tag and filing. Grain uniqueness is a singular test.
+    columns:
+      - name: cik
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_company')
+                field: cik
+      - name: fiscal_year
+        data_tests: [not_null]
+      - name: metric
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('metric_map')
+                field: metric
+      - name: value
+        data_tests: [not_null]
+      - name: adsh
+        data_tests: [not_null]
+
+  - name: fct_financials_wide
+    description: One row per (cik, fiscal_year) with one column per metric.
+    columns:
+      - name: cik
+        data_tests: [not_null]
+      - name: fiscal_year
+        data_tests: [not_null]
