@@ -1,0 +1,129 @@
+# Eval questions (SPEC §7). Ground truth comes from oracle_sql, run against the same
+# database the agent queries. The agent never sees oracle_sql.
+#
+# Every question is answerable from the CI fixture subset (Phase 6) with the same result
+# as from the full quarter, and uses company names whose ILIKE 'NAME%' pattern matches a
+# single filer, so the recorded cassettes replay identically in CI.
+
+# --- single-number lookups (8) ---
+- id: q01
+  question: What was Alphabet's total revenue in fiscal year 2024?
+  answer_type: number
+  oracle_sql: >
+    SELECT revenue FROM analytics.fct_financials_wide
+    WHERE company_name ILIKE 'ALPHABET INC%' AND fiscal_year = 2024
+  tolerance: 0.01
+
+- id: q02
+  question: What was Amazon's net income in FY2024?
+  answer_type: number
+  oracle_sql: >
+    SELECT net_income FROM analytics.fct_financials_wide
+    WHERE company_name ILIKE 'AMAZON COM INC%' AND fiscal_year = 2024
+  tolerance: 0.01
+
+- id: q03
+  question: What was Nvidia's diluted EPS for fiscal year 2024?
+  answer_type: number
+  oracle_sql: >
+    SELECT eps_diluted FROM analytics.fct_financials_wide
+    WHERE company_name ILIKE 'NVIDIA CORP%' AND fiscal_year = 2024
+  tolerance: 0.01
+
+- id: q04
+  question: What were Tesla's total assets at the end of fiscal year 2024?
+  answer_type: number
+  oracle_sql: >
+    SELECT total_assets FROM analytics.fct_financials_wide
+    WHERE company_name ILIKE 'TESLA%' AND fiscal_year = 2024
+  tolerance: 0.01
+
+- id: q05
+  question: How much net income did JPMorgan Chase report for FY2024?
+  answer_type: number
+  oracle_sql: >
+    SELECT net_income FROM analytics.fct_financials_wide
+    WHERE company_name ILIKE 'JPMORGAN CHASE%' AND fiscal_year = 2024
+  tolerance: 0.01
+
+- id: q06
+  question: What was Meta's operating cash flow in fiscal year 2024?
+  answer_type: number
+  oracle_sql: >
+    SELECT operating_cash_flow FROM analytics.fct_financials_wide
+    WHERE company_name ILIKE 'META PLATFORMS%' AND fiscal_year = 2024
+  tolerance: 0.01
+
+- id: q07
+  question: What was Walmart's revenue in fiscal year 2024?
+  answer_type: number
+  oracle_sql: >
+    SELECT revenue FROM analytics.fct_financials_wide
+    WHERE company_name ILIKE 'WALMART%' AND fiscal_year = 2024
+  tolerance: 0.01
+
+- id: q08
+  question: What was Netflix's total revenue for FY2024?
+  answer_type: number
+  oracle_sql: >
+    SELECT revenue FROM analytics.fct_financials_wide
+    WHERE company_name ILIKE 'NETFLIX%' AND fiscal_year = 2024
+  tolerance: 0.01
+
+# --- rankings and aggregations (3) ---
+- id: q09
+  question: Which three companies had the highest net income in FY2024?
+  answer_type: list
+  oracle_sql: >
+    SELECT company_name FROM analytics.fct_financials_wide
+    WHERE fiscal_year = 2024 ORDER BY net_income DESC NULLS LAST LIMIT 3
+
+- id: q10
+  question: >
+    Among Alphabet, Amazon, Meta, Nvidia and Tesla, which companies had FY2024 revenue
+    above 150 billion dollars?
+  answer_type: list
+  oracle_sql: >
+    SELECT company_name FROM analytics.fct_financials_wide
+    WHERE fiscal_year = 2024 AND revenue > 150e9
+      AND (company_name ILIKE 'ALPHABET INC%' OR company_name ILIKE 'AMAZON COM INC%'
+           OR company_name ILIKE 'META PLATFORMS%' OR company_name ILIKE 'NVIDIA CORP%'
+           OR company_name ILIKE 'TESLA%')
+
+- id: q11
+  question: Rank Amazon, Walmart and Exxon Mobil by FY2024 revenue, highest first.
+  answer_type: list
+  oracle_sql: >
+    SELECT company_name FROM analytics.fct_financials_wide
+    WHERE fiscal_year = 2024
+      AND (company_name ILIKE 'AMAZON COM INC%' OR company_name ILIKE 'WALMART%'
+           OR company_name ILIKE 'EXXON MOBIL%')
+    ORDER BY revenue DESC
+
+# --- ratios computed in SQL (2) ---
+- id: q12
+  question: What is Tesla's ratio of total liabilities to stockholders' equity for FY2024?
+  answer_type: number
+  oracle_sql: >
+    SELECT total_liabilities / NULLIF(stockholders_equity, 0)
+    FROM analytics.fct_financials_wide
+    WHERE company_name ILIKE 'TESLA%' AND fiscal_year = 2024
+  tolerance: 0.02
+
+- id: q13
+  question: What was Meta's net profit margin (net income divided by revenue) in FY2024?
+  answer_type: number
+  oracle_sql: >
+    SELECT net_income / NULLIF(revenue, 0)
+    FROM analytics.fct_financials_wide
+    WHERE company_name ILIKE 'META PLATFORMS%' AND fiscal_year = 2024
+  tolerance: 0.02
+
+# --- out of scope (2) ---
+- id: q14
+  question: What is Nvidia's stock price today?
+  answer_type: refusal
+
+- id: q15
+  question: What was Amazon's revenue in the third quarter of 2024?
+  answer_type: refusal

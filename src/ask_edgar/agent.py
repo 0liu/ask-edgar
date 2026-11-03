@@ -11,12 +11,14 @@ rather than from the model's text.
 import json
 import os
 import time
+from collections.abc import Callable
 from importlib.resources import files
 from typing import Any, Literal
 
 import anthropic
 import psycopg
 from anthropic.types import (
+    Message,
     MessageParam,
     OutputConfigParam,
     TextBlockParam,
@@ -24,6 +26,7 @@ from anthropic.types import (
     ToolParam,
     ToolResultBlockParam,
 )
+from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
 from psycopg.rows import TupleRow
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -81,6 +84,11 @@ FINAL_REPLY_SCHEMA: dict[str, object] = {
 }
 
 
+# Anything with the signature of ``anthropic.Anthropic().messages.create``: the real
+# client, the eval recorder, or a fake in tests.
+type MessageCreate = Callable[..., Message]
+
+
 class AgentError(RuntimeError):
     """The model did not produce a usable reply."""
 
@@ -114,6 +122,7 @@ class Answer(BaseModel):
     caveats: list[str] = Field(default_factory=list)
     in_scope: bool = True
     tool_calls: int = 0
+    first_query_ok: bool | None = None  # None when no query ran
     model: str
     usage: Usage = Field(default_factory=Usage)
     latency_ms: int = 0
@@ -132,13 +141,13 @@ def system_prompt(schema: str | None = None) -> str:
 def ask(
     question: str,
     *,
-    client: anthropic.Anthropic | None = None,
+    create: MessageCreate | None = None,
     model: str | None = None,
     max_tool_calls: int = MAX_TOOL_CALLS,
     conn: psycopg.Connection[TupleRow] | None = None,
 ) -> Answer:
     """Answer ``question`` from the warehouse. Raises ``AgentError`` on a broken reply."""
-    client = client or anthropic.Anthropic()
+    create = create or anthropic.Anthropic().messages.create
     model = model_name(model)
     started = time.perf_counter()
     system: list[TextBlockParam] = [
@@ -152,6 +161,7 @@ def ask(
     usage = Usage()
     tool_calls = 0
     last_sql: str | None = None
+    first_query_ok: bool | None = None
 
     while True:
         # Once the budget is spent the model may not call tools: it has to answer.
@@ -160,15 +170,16 @@ def ask(
             if tool_calls < max_tool_calls
             else {"type": "none"}
         )
-        response = client.messages.create(
-            model=model,
-            max_tokens=MAX_TOKENS,
-            system=system,
-            messages=messages,
-            tools=TOOLS,
-            tool_choice=tool_choice,
-            output_config=output_config,
-        )
+        request: MessageCreateParamsNonStreaming = {
+            "model": model,
+            "max_tokens": MAX_TOKENS,
+            "system": system,
+            "messages": messages,
+            "tools": TOOLS,
+            "tool_choice": tool_choice,
+            "output_config": output_config,
+        }
+        response = create(**request)
         usage.add(response.usage)
 
         if response.stop_reason == "tool_use":
@@ -179,6 +190,8 @@ def ask(
                     continue
                 tool_calls += 1
                 result, sql_run = _run_tool(block.id, block.name, block.input, conn)
+                if block.name == "run_query" and first_query_ok is None:
+                    first_query_ok = not result.get("is_error", False)
                 if sql_run is not None:
                     last_sql = sql_run
                 results.append(result)
@@ -197,6 +210,7 @@ def ask(
                 caveats=[detail] if detail else [],
                 in_scope=False,
                 tool_calls=tool_calls,
+                first_query_ok=first_query_ok,
                 model=model,
                 usage=usage,
                 latency_ms=latency_ms,
@@ -216,6 +230,7 @@ def ask(
             caveats=caveats,
             in_scope=reply.in_scope,
             tool_calls=tool_calls,
+            first_query_ok=first_query_ok,
             model=model,
             usage=usage,
             latency_ms=latency_ms,

@@ -1,0 +1,278 @@
+[
+  {
+    "key": "a3300888179a2097db69f580fdf5956a365e11e17f35d754a9361eb93e7eaeb9",
+    "latency_ms": 1382,
+    "request": {
+      "model": "claude-sonnet-5-5",
+      "max_tokens": 8192,
+      "system": [
+        {
+          "type": "text",
+          "text": "You are ask-edgar, an assistant for credit and investment analysts. You answer questions about US public companies' annual financial statements by querying a Postgres warehouse built from the SEC Financial Statement Data Sets, quarter 2025q1, and you report the figures together with where they came from.\n\n## What the data covers\n\n- Annual figures from 10-K and 10-K/A filings submitted to the SEC between January and March 2025. Almost all rows are fiscal year 2024; late filers contribute fiscal year 2023, and a few 2022.\n- Companies whose 10-K was filed outside that window are absent, for example Apple (September year end) and Microsoft (June year end). If a company has no row, say that it is not in the loaded quarter rather than guessing.\n- Consolidated, company-level figures only: no business segments, no quarterly (10-Q) figures.\n\nOut of scope, so refuse with `in_scope: false`: stock prices, market capitalisation, valuation multiples, forecasts or guidance, investment advice (\"should I buy\"), quarterly or monthly figures, dividends per share, anything from filings outside 2025q1, and the text of the filings. In the refusal, say in one or two sentences what the data does cover.\n\n## How to work\n\n1. Query before you answer. Never state a number you did not read from a `run_query` result. If a query fails, read the error, fix the query and run it again.\n2. Prefer `analytics.fct_financials_wide`: one row per company and fiscal year, one column per metric. Use `analytics.fct_financials` when the source tag, filing (`adsh`) or unit of a figure matters. Use `analytics.dim_company` for industry (`sic_description`) and state of incorporation.\n3. Qualify every table with the `analytics` schema. Only a single SELECT is allowed, and results are capped at 50 rows, so aggregate, filter and `ORDER BY ... LIMIT` in SQL instead of fetching many rows.\n4. Match companies with `company_name ILIKE '...%'`. Names are the legal filer names in upper case: `ALPHABET INC.`, `AMAZON COM INC`, `TESLA, INC.`, `NVIDIA CORP`, `JPMORGAN CHASE & CO`, `BERKSHIRE HATHAWAY INC`. If a pattern matches several companies, look at them (name, cik, total_assets), use the one the question clearly means, and say which one you used.\n5. When the question names no year, use `fiscal_year = 2024`. Always say which fiscal year a figure is from. If the company only has another year, report that year and say so.\n6. Compute ratios, differences and rankings in SQL (`NULLIF` for divisions, `ORDER BY ... DESC NULLS LAST`). A NULL metric means the company reported nothing under a mapped tag, not zero. Revenue is NULL for many banks and insurers because they report interest income under other tags; say so when it affects an answer.\n7. Amounts are in USD unless the row's `uom` says otherwise; EPS is in USD per share; share counts are in shares. Write money compactly with one decimal (`$1.2B`, `$845.0M`) and give the exact figure when a precise number was asked for.\n8. You have at most 5 tool calls per question. Spend them on queries; the schema below is complete, so `get_schema` is rarely needed.\n\n## Final reply\n\nReply with a JSON object: `{\"answer\": \"...\", \"caveats\": [\"...\"], \"in_scope\": true}`.\n\n- `answer`: one to three sentences with the figures, the company names as filed, and the fiscal year. For lists, name the items in order with their values. Write it as final prose for the reader: no self-corrections, no notes to yourself.\n- `caveats`: short notes the reader needs, such as a missing year, an ambiguous name, a NULL metric, a non-USD unit, or a truncated result. An empty list when there are none.\n- `in_scope`: false only for refusals.\n\nThe SQL you ran is attached to the reply automatically; do not repeat it in `answer`.\n\n## Schema\n\n-- Schema analytics (Postgres): three relations. Qualify every table with the schema name, e.g. analytics.fct_financials_wide.\n\n-- one row per company (cik), from its most recent filing in the quarter\nCREATE TABLE analytics.dim_company (\n    cik bigint,                   -- SEC Central Index Key, the company id; the same across tables\n    name text,                    -- legal filer name in upper case, e.g. ALPHABET INC., AMAZON COM INC\n    sic integer,                  -- Standard Industrial Classification code\n    sic_description text,         -- industry name for sic; NULL when the filer has none\n    state_of_incorporation text,  -- two-letter state or country code\n    fiscal_year_end text,         -- month and day the fiscal year ends, MMDD (1231 = 31 Dec)\n    latest_adsh text,             -- accession number of the company's most recent filing in the quarter\n    latest_form text,             -- form type of that filing (10-K, 10-Q, 8-K, ...)\n    latest_filed date            -- date that filing was made\n);\n\n-- one row per (cik, fiscal_year, metric): the annual 10-K figure and its source\nCREATE TABLE analytics.fct_financials (\n    cik bigint,           -- SEC Central Index Key, the company id; the same across tables\n    company_name text,    -- legal filer name in upper case; match with ILIKE\n    adsh text,            -- accession number of the 10-K the figure comes from\n    form text,            -- 10-K or 10-K/A\n    fiscal_year integer,  -- fiscal year of the figure; mostly 2024, some 2023\n    fiscal_period text,   -- always FY\n    period_end date,      -- balance-sheet date the fiscal year ends on\n    metric text,          -- metric name; the columns of fct_financials_wide (list below)\n    value numeric,        -- the reported figure; USD unless uom says otherwise\n    uom text,             -- unit: USD, shares, USD/shares, or a foreign currency code\n    source_tag text,      -- XBRL tag the figure was taken from\n    qtrs integer         -- 0 for balance-sheet figures, 4 for full-year flows\n);\n\n-- one row per (cik, fiscal_year), one column per metric; NULL = nothing reported under a mapped tag\nCREATE TABLE analytics.fct_financials_wide (\n    cik bigint,                       -- SEC Central Index Key, the company id; the same across tables\n    company_name text,                -- legal filer name in upper case; match with ILIKE\n    fiscal_year integer,              -- fiscal year of the figure; mostly 2024, some 2023\n    period_end date,                  -- balance-sheet date the fiscal year ends on\n    accounts_receivable numeric,      -- Accounts receivable, net, current, at fiscal year end\n    capex numeric,                    -- Capital expenditure: payments to acquire property, plant and equipment\n    cash numeric,                     -- Cash and cash equivalents at fiscal year end\n    cost_of_revenue numeric,          -- Cost of revenue (cost of goods and services sold)\n    current_assets numeric,           -- Total current assets at fiscal year end\n    current_liabilities numeric,      -- Total current liabilities at fiscal year end\n    depreciation numeric,             -- Depreciation, depletion and amortization expense\n    dividends_paid numeric,           -- Cash dividends paid\n    eps_basic numeric,                -- Basic earnings per share, in USD per share\n    eps_diluted numeric,              -- Diluted earnings per share, in USD per share\n    financing_cash_flow numeric,      -- Net cash provided by (used in) financing activities\n    goodwill numeric,                 -- Goodwill at fiscal year end\n    gross_profit numeric,             -- Gross profit: revenue minus cost of revenue\n    income_tax numeric,               -- Income tax expense (benefit)\n    interest_expense numeric,         -- Interest expense\n    inventory numeric,                -- Inventory, net, at fiscal year end\n    investing_cash_flow numeric,      -- Net cash provided by (used in) investing activities\n    liabilities_and_equity numeric,   -- Total liabilities and stockholders' equity (equals total assets)\n    long_term_debt numeric,           -- Long-term debt at fiscal year end\n    net_income numeric,               -- Net income (loss) for the fiscal year\n    operating_cash_flow numeric,      -- Net cash provided by (used in) operating activities\n    operating_income numeric,         -- Operating income (loss)\n    pretax_income numeric,            -- Income (loss) before income taxes\n    r_and_d numeric,                  -- Research and development expense\n    revenue numeric,                  -- Total revenues for the fiscal year (net sales)\n    sga numeric,                      -- Selling, general and administrative expense\n    shares_outstanding numeric,       -- Common shares outstanding at fiscal year end\n    stockholders_equity numeric,      -- Total stockholders' equity at fiscal year end\n    total_assets numeric,             -- Total assets at fiscal year end\n    total_liabilities numeric,        -- Total liabilities at fiscal year end\n    weighted_shares_diluted numeric  -- Weighted-average diluted shares outstanding during the year\n);\n\n-- Metrics: the 31 metric columns of fct_financials_wide, also the values of fct_financials.metric.\n-- balance = at fiscal year end; flow = over the fiscal year; per_share = USD per share.\n-- Each metric is filled from the first XBRL tag listed that the company reported.\naccounts_receivable (balance): Accounts receivable, net, current, at fiscal year end [AccountsReceivableNetCurrent]\ncapex (flow): Capital expenditure: payments to acquire property, plant and equipment [PaymentsToAcquirePropertyPlantAndEquipment]\ncash (balance): Cash and cash equivalents at fiscal year end [CashAndCashEquivalentsAtCarryingValue, CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents]\ncost_of_revenue (flow): Cost of revenue (cost of goods and services sold) [CostOfRevenue, CostOfGoodsAndServicesSold]\ncurrent_assets (balance): Total current assets at fiscal year end [AssetsCurrent]\ncurrent_liabilities (balance): Total current liabilities at fiscal year end [LiabilitiesCurrent]\ndepreciation (flow): Depreciation, depletion and amortization expense [DepreciationDepletionAndAmortization, DepreciationAndAmortization]\ndividends_paid (flow): Cash dividends paid [PaymentsOfDividends, PaymentsOfDividendsCommonStock]\neps_basic (per_share): Basic earnings per share, in USD per share [EarningsPerShareBasic]\neps_diluted (per_share): Diluted earnings per share, in USD per share [EarningsPerShareDiluted]\nfinancing_cash_flow (flow): Net cash provided by (used in) financing activities [NetCashProvidedByUsedInFinancingActivities]\ngoodwill (balance): Goodwill at fiscal year end [Goodwill]\ngross_profit (flow): Gross profit: revenue minus cost of revenue [GrossProfit]\nincome_tax (flow): Income tax expense (benefit) [IncomeTaxExpenseBenefit]\ninterest_expense (flow): Interest expense [InterestExpense, InterestExpenseNonoperating]\ninventory (balance): Inventory, net, at fiscal year end [InventoryNet]\ninvesting_cash_flow (flow): Net cash provided by (used in) investing activities [NetCashProvidedByUsedInInvestingActivities]\nliabilities_and_equity (balance): Total liabilities and stockholders' equity (equals total assets) [LiabilitiesAndStockholdersEquity]\nlong_term_debt (balance): Long-term debt at fiscal year end [LongTermDebt, LongTermDebtNoncurrent]\nnet_income (flow): Net income (loss) for the fiscal year [NetIncomeLoss, ProfitLoss]\noperating_cash_flow (flow): Net cash provided by (used in) operating activities [NetCashProvidedByUsedInOperatingActivities, NetCashProvidedByUsedInOperatingActivitiesContinuingOperations]\noperating_income (flow): Operating income (loss) [OperatingIncomeLoss]\npretax_income (flow): Income (loss) before income taxes [IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest, IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments]\nr_and_d (flow): Research and development expense [ResearchAndDevelopmentExpense]\nrevenue (flow): Total revenues for the fiscal year (net sales) [Revenues, RevenueFromContractWithCustomerExcludingAssessedTax, SalesRevenueNet, RevenueFromContractWithCustomerIncludingAssessedTax]\nsga (flow): Selling, general and administrative expense [SellingGeneralAndAdministrativeExpense]\nshares_outstanding (balance): Common shares outstanding at fiscal year end [CommonStockSharesOutstanding]\nstockholders_equity (balance): Total stockholders' equity at fiscal year end [StockholdersEquity, StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest]\ntotal_assets (balance): Total assets at fiscal year end [Assets]\ntotal_liabilities (balance): Total liabilities at fiscal year end [Liabilities]\nweighted_shares_diluted (flow): Weighted-average diluted shares outstanding during the year [WeightedAverageNumberOfDilutedSharesOutstanding]\n\n-- Sample rows of analytics.fct_financials_wide, fiscal year 2024 (amounts in USD, EPS in USD per share, share counts in shares):\ncik | company_name | fiscal_year | period_end | accounts_receivable | capex | cash | cost_of_revenue | current_assets | current_liabilities | depreciation | dividends_paid | eps_basic | eps_diluted | financing_cash_flow | goodwill | gross_profit | income_tax | interest_expense | inventory | investing_cash_flow | liabilities_and_equity | long_term_debt | net_income | operating_cash_flow | operating_income | pretax_income | r_and_d | revenue | sga | shares_outstanding | stockholders_equity | total_assets | total_liabilities | weighted_shares_diluted\n1018724 | AMAZON COM INC | 2024 | 2024-12-31 | 55451000000 | NULL | 78779000000 | 326288000000 | 190867000000 | 179431000000 | 52795000000 | NULL | 5.66 | 5.53 | -11812000000 | 23074000000 | NULL | 9265000000 | 2406000000 | 34214000000 | -94342000000 | 624894000000 | 52623000000 | 59248000000 | 115877000000 | 68593000000 | 68614000000 | NULL | 637959000000 | NULL | 10593000000 | 285970000000 | 624894000000 | NULL | 10721000000\n1318605 | TESLA, INC. | 2024 | 2024-12-31 | 4418000000 | 11339000000 | 16139000000 | 80240000000 | 58360000000 | 28821000000 | NULL | NULL | 2.23 | 2.04 | 3853000000 | 244000000 | 17450000000 | 1837000000 | 350000000 | 12017000000 | -18787000000 | 122070000000 | NULL | 7091000000 | 14923000000 | 7076000000 | 8990000000 | 4540000000 | 97690000000 | 5150000000 | 3216000000 | 72913000000 | 122070000000 | 48390000000 | 3498000000\n1652044 | ALPHABET INC. | 2024 | 2024-12-31 | 52340000000 | 52535000000 | 23466000000 | 146306000000 | 163711000000 | 89122000000 | NULL | 7363000000 | 8.13 | 8.04 | -79733000000 | 31885000000 | NULL | 19697000000 | NULL | NULL | -45536000000 | 450256000000 | NULL | 100118000000 | 125299000000 | 112390000000 | 119815000000 | 49326000000 | 350018000000 | NULL | 12211000000 | 325084000000 | 450256000000 | 125172000000 | NULL\n",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": "What was Amazon's net income in FY2024?"
+        }
+      ],
+      "tools": [
+        {
+          "name": "get_schema",
+          "description": "The warehouse schema: DDL of the analytics tables, the metric list with definitions, and sample rows. The same text is already in your instructions.",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          },
+          "strict": true
+        },
+        {
+          "name": "run_query",
+          "description": "Run one read-only SELECT against the analytics schema and return {columns, rows, row_count, truncated}. At most 50 rows come back (truncated = true when more matched). On failure the error text is returned so you can fix the query; each attempt counts toward the budget.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "sql": {
+                "type": "string",
+                "description": "A single SELECT over analytics.* tables, no semicolon."
+              }
+            },
+            "required": [
+              "sql"
+            ],
+            "additionalProperties": false
+          },
+          "strict": true
+        }
+      ],
+      "tool_choice": {
+        "type": "auto",
+        "disable_parallel_tool_use": true
+      },
+      "output_config": {
+        "effort": "medium",
+        "format": {
+          "type": "json_schema",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "answer": {
+                "type": "string"
+              },
+              "caveats": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "in_scope": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "answer",
+              "caveats",
+              "in_scope"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "response": {
+      "id": "msg_011CgfSG2aKSCxAeJNwUyLqR",
+      "container": null,
+      "content": [
+        {
+          "id": "toolu_01UDrmWpmV8vojSuwsFBpHiD",
+          "caller": {
+            "type": "direct"
+          },
+          "input": {
+            "sql": "select company_name, cik, fiscal_year, period_end, net_income from analytics.fct_financials_wide where company_name ilike 'AMAZON COM%' and fiscal_year=2024"
+          },
+          "name": "run_query",
+          "type": "tool_use",
+          "toolset_name": null
+        }
+      ],
+      "diagnostics": null,
+      "model": "claude-sonnet-5-5",
+      "role": "assistant",
+      "stop_details": null,
+      "stop_reason": "tool_use",
+      "stop_sequence": null,
+      "type": "message",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6473,
+        "inference_geo": "global",
+        "input_tokens": 90,
+        "output_tokens": 108,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": null,
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    }
+  },
+  {
+    "key": "b56e20af0286e54881acd29561d8e9da27d3532a5d4bd1a5bb4351697bb0af78",
+    "latency_ms": 2064,
+    "request": {
+      "model": "claude-sonnet-5-5",
+      "max_tokens": 8192,
+      "system": [
+        {
+          "type": "text",
+          "text": "You are ask-edgar, an assistant for credit and investment analysts. You answer questions about US public companies' annual financial statements by querying a Postgres warehouse built from the SEC Financial Statement Data Sets, quarter 2025q1, and you report the figures together with where they came from.\n\n## What the data covers\n\n- Annual figures from 10-K and 10-K/A filings submitted to the SEC between January and March 2025. Almost all rows are fiscal year 2024; late filers contribute fiscal year 2023, and a few 2022.\n- Companies whose 10-K was filed outside that window are absent, for example Apple (September year end) and Microsoft (June year end). If a company has no row, say that it is not in the loaded quarter rather than guessing.\n- Consolidated, company-level figures only: no business segments, no quarterly (10-Q) figures.\n\nOut of scope, so refuse with `in_scope: false`: stock prices, market capitalisation, valuation multiples, forecasts or guidance, investment advice (\"should I buy\"), quarterly or monthly figures, dividends per share, anything from filings outside 2025q1, and the text of the filings. In the refusal, say in one or two sentences what the data does cover.\n\n## How to work\n\n1. Query before you answer. Never state a number you did not read from a `run_query` result. If a query fails, read the error, fix the query and run it again.\n2. Prefer `analytics.fct_financials_wide`: one row per company and fiscal year, one column per metric. Use `analytics.fct_financials` when the source tag, filing (`adsh`) or unit of a figure matters. Use `analytics.dim_company` for industry (`sic_description`) and state of incorporation.\n3. Qualify every table with the `analytics` schema. Only a single SELECT is allowed, and results are capped at 50 rows, so aggregate, filter and `ORDER BY ... LIMIT` in SQL instead of fetching many rows.\n4. Match companies with `company_name ILIKE '...%'`. Names are the legal filer names in upper case: `ALPHABET INC.`, `AMAZON COM INC`, `TESLA, INC.`, `NVIDIA CORP`, `JPMORGAN CHASE & CO`, `BERKSHIRE HATHAWAY INC`. If a pattern matches several companies, look at them (name, cik, total_assets), use the one the question clearly means, and say which one you used.\n5. When the question names no year, use `fiscal_year = 2024`. Always say which fiscal year a figure is from. If the company only has another year, report that year and say so.\n6. Compute ratios, differences and rankings in SQL (`NULLIF` for divisions, `ORDER BY ... DESC NULLS LAST`). A NULL metric means the company reported nothing under a mapped tag, not zero. Revenue is NULL for many banks and insurers because they report interest income under other tags; say so when it affects an answer.\n7. Amounts are in USD unless the row's `uom` says otherwise; EPS is in USD per share; share counts are in shares. Write money compactly with one decimal (`$1.2B`, `$845.0M`) and give the exact figure when a precise number was asked for.\n8. You have at most 5 tool calls per question. Spend them on queries; the schema below is complete, so `get_schema` is rarely needed.\n\n## Final reply\n\nReply with a JSON object: `{\"answer\": \"...\", \"caveats\": [\"...\"], \"in_scope\": true}`.\n\n- `answer`: one to three sentences with the figures, the company names as filed, and the fiscal year. For lists, name the items in order with their values. Write it as final prose for the reader: no self-corrections, no notes to yourself.\n- `caveats`: short notes the reader needs, such as a missing year, an ambiguous name, a NULL metric, a non-USD unit, or a truncated result. An empty list when there are none.\n- `in_scope`: false only for refusals.\n\nThe SQL you ran is attached to the reply automatically; do not repeat it in `answer`.\n\n## Schema\n\n-- Schema analytics (Postgres): three relations. Qualify every table with the schema name, e.g. analytics.fct_financials_wide.\n\n-- one row per company (cik), from its most recent filing in the quarter\nCREATE TABLE analytics.dim_company (\n    cik bigint,                   -- SEC Central Index Key, the company id; the same across tables\n    name text,                    -- legal filer name in upper case, e.g. ALPHABET INC., AMAZON COM INC\n    sic integer,                  -- Standard Industrial Classification code\n    sic_description text,         -- industry name for sic; NULL when the filer has none\n    state_of_incorporation text,  -- two-letter state or country code\n    fiscal_year_end text,         -- month and day the fiscal year ends, MMDD (1231 = 31 Dec)\n    latest_adsh text,             -- accession number of the company's most recent filing in the quarter\n    latest_form text,             -- form type of that filing (10-K, 10-Q, 8-K, ...)\n    latest_filed date            -- date that filing was made\n);\n\n-- one row per (cik, fiscal_year, metric): the annual 10-K figure and its source\nCREATE TABLE analytics.fct_financials (\n    cik bigint,           -- SEC Central Index Key, the company id; the same across tables\n    company_name text,    -- legal filer name in upper case; match with ILIKE\n    adsh text,            -- accession number of the 10-K the figure comes from\n    form text,            -- 10-K or 10-K/A\n    fiscal_year integer,  -- fiscal year of the figure; mostly 2024, some 2023\n    fiscal_period text,   -- always FY\n    period_end date,      -- balance-sheet date the fiscal year ends on\n    metric text,          -- metric name; the columns of fct_financials_wide (list below)\n    value numeric,        -- the reported figure; USD unless uom says otherwise\n    uom text,             -- unit: USD, shares, USD/shares, or a foreign currency code\n    source_tag text,      -- XBRL tag the figure was taken from\n    qtrs integer         -- 0 for balance-sheet figures, 4 for full-year flows\n);\n\n-- one row per (cik, fiscal_year), one column per metric; NULL = nothing reported under a mapped tag\nCREATE TABLE analytics.fct_financials_wide (\n    cik bigint,                       -- SEC Central Index Key, the company id; the same across tables\n    company_name text,                -- legal filer name in upper case; match with ILIKE\n    fiscal_year integer,              -- fiscal year of the figure; mostly 2024, some 2023\n    period_end date,                  -- balance-sheet date the fiscal year ends on\n    accounts_receivable numeric,      -- Accounts receivable, net, current, at fiscal year end\n    capex numeric,                    -- Capital expenditure: payments to acquire property, plant and equipment\n    cash numeric,                     -- Cash and cash equivalents at fiscal year end\n    cost_of_revenue numeric,          -- Cost of revenue (cost of goods and services sold)\n    current_assets numeric,           -- Total current assets at fiscal year end\n    current_liabilities numeric,      -- Total current liabilities at fiscal year end\n    depreciation numeric,             -- Depreciation, depletion and amortization expense\n    dividends_paid numeric,           -- Cash dividends paid\n    eps_basic numeric,                -- Basic earnings per share, in USD per share\n    eps_diluted numeric,              -- Diluted earnings per share, in USD per share\n    financing_cash_flow numeric,      -- Net cash provided by (used in) financing activities\n    goodwill numeric,                 -- Goodwill at fiscal year end\n    gross_profit numeric,             -- Gross profit: revenue minus cost of revenue\n    income_tax numeric,               -- Income tax expense (benefit)\n    interest_expense numeric,         -- Interest expense\n    inventory numeric,                -- Inventory, net, at fiscal year end\n    investing_cash_flow numeric,      -- Net cash provided by (used in) investing activities\n    liabilities_and_equity numeric,   -- Total liabilities and stockholders' equity (equals total assets)\n    long_term_debt numeric,           -- Long-term debt at fiscal year end\n    net_income numeric,               -- Net income (loss) for the fiscal year\n    operating_cash_flow numeric,      -- Net cash provided by (used in) operating activities\n    operating_income numeric,         -- Operating income (loss)\n    pretax_income numeric,            -- Income (loss) before income taxes\n    r_and_d numeric,                  -- Research and development expense\n    revenue numeric,                  -- Total revenues for the fiscal year (net sales)\n    sga numeric,                      -- Selling, general and administrative expense\n    shares_outstanding numeric,       -- Common shares outstanding at fiscal year end\n    stockholders_equity numeric,      -- Total stockholders' equity at fiscal year end\n    total_assets numeric,             -- Total assets at fiscal year end\n    total_liabilities numeric,        -- Total liabilities at fiscal year end\n    weighted_shares_diluted numeric  -- Weighted-average diluted shares outstanding during the year\n);\n\n-- Metrics: the 31 metric columns of fct_financials_wide, also the values of fct_financials.metric.\n-- balance = at fiscal year end; flow = over the fiscal year; per_share = USD per share.\n-- Each metric is filled from the first XBRL tag listed that the company reported.\naccounts_receivable (balance): Accounts receivable, net, current, at fiscal year end [AccountsReceivableNetCurrent]\ncapex (flow): Capital expenditure: payments to acquire property, plant and equipment [PaymentsToAcquirePropertyPlantAndEquipment]\ncash (balance): Cash and cash equivalents at fiscal year end [CashAndCashEquivalentsAtCarryingValue, CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents]\ncost_of_revenue (flow): Cost of revenue (cost of goods and services sold) [CostOfRevenue, CostOfGoodsAndServicesSold]\ncurrent_assets (balance): Total current assets at fiscal year end [AssetsCurrent]\ncurrent_liabilities (balance): Total current liabilities at fiscal year end [LiabilitiesCurrent]\ndepreciation (flow): Depreciation, depletion and amortization expense [DepreciationDepletionAndAmortization, DepreciationAndAmortization]\ndividends_paid (flow): Cash dividends paid [PaymentsOfDividends, PaymentsOfDividendsCommonStock]\neps_basic (per_share): Basic earnings per share, in USD per share [EarningsPerShareBasic]\neps_diluted (per_share): Diluted earnings per share, in USD per share [EarningsPerShareDiluted]\nfinancing_cash_flow (flow): Net cash provided by (used in) financing activities [NetCashProvidedByUsedInFinancingActivities]\ngoodwill (balance): Goodwill at fiscal year end [Goodwill]\ngross_profit (flow): Gross profit: revenue minus cost of revenue [GrossProfit]\nincome_tax (flow): Income tax expense (benefit) [IncomeTaxExpenseBenefit]\ninterest_expense (flow): Interest expense [InterestExpense, InterestExpenseNonoperating]\ninventory (balance): Inventory, net, at fiscal year end [InventoryNet]\ninvesting_cash_flow (flow): Net cash provided by (used in) investing activities [NetCashProvidedByUsedInInvestingActivities]\nliabilities_and_equity (balance): Total liabilities and stockholders' equity (equals total assets) [LiabilitiesAndStockholdersEquity]\nlong_term_debt (balance): Long-term debt at fiscal year end [LongTermDebt, LongTermDebtNoncurrent]\nnet_income (flow): Net income (loss) for the fiscal year [NetIncomeLoss, ProfitLoss]\noperating_cash_flow (flow): Net cash provided by (used in) operating activities [NetCashProvidedByUsedInOperatingActivities, NetCashProvidedByUsedInOperatingActivitiesContinuingOperations]\noperating_income (flow): Operating income (loss) [OperatingIncomeLoss]\npretax_income (flow): Income (loss) before income taxes [IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest, IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments]\nr_and_d (flow): Research and development expense [ResearchAndDevelopmentExpense]\nrevenue (flow): Total revenues for the fiscal year (net sales) [Revenues, RevenueFromContractWithCustomerExcludingAssessedTax, SalesRevenueNet, RevenueFromContractWithCustomerIncludingAssessedTax]\nsga (flow): Selling, general and administrative expense [SellingGeneralAndAdministrativeExpense]\nshares_outstanding (balance): Common shares outstanding at fiscal year end [CommonStockSharesOutstanding]\nstockholders_equity (balance): Total stockholders' equity at fiscal year end [StockholdersEquity, StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest]\ntotal_assets (balance): Total assets at fiscal year end [Assets]\ntotal_liabilities (balance): Total liabilities at fiscal year end [Liabilities]\nweighted_shares_diluted (flow): Weighted-average diluted shares outstanding during the year [WeightedAverageNumberOfDilutedSharesOutstanding]\n\n-- Sample rows of analytics.fct_financials_wide, fiscal year 2024 (amounts in USD, EPS in USD per share, share counts in shares):\ncik | company_name | fiscal_year | period_end | accounts_receivable | capex | cash | cost_of_revenue | current_assets | current_liabilities | depreciation | dividends_paid | eps_basic | eps_diluted | financing_cash_flow | goodwill | gross_profit | income_tax | interest_expense | inventory | investing_cash_flow | liabilities_and_equity | long_term_debt | net_income | operating_cash_flow | operating_income | pretax_income | r_and_d | revenue | sga | shares_outstanding | stockholders_equity | total_assets | total_liabilities | weighted_shares_diluted\n1018724 | AMAZON COM INC | 2024 | 2024-12-31 | 55451000000 | NULL | 78779000000 | 326288000000 | 190867000000 | 179431000000 | 52795000000 | NULL | 5.66 | 5.53 | -11812000000 | 23074000000 | NULL | 9265000000 | 2406000000 | 34214000000 | -94342000000 | 624894000000 | 52623000000 | 59248000000 | 115877000000 | 68593000000 | 68614000000 | NULL | 637959000000 | NULL | 10593000000 | 285970000000 | 624894000000 | NULL | 10721000000\n1318605 | TESLA, INC. | 2024 | 2024-12-31 | 4418000000 | 11339000000 | 16139000000 | 80240000000 | 58360000000 | 28821000000 | NULL | NULL | 2.23 | 2.04 | 3853000000 | 244000000 | 17450000000 | 1837000000 | 350000000 | 12017000000 | -18787000000 | 122070000000 | NULL | 7091000000 | 14923000000 | 7076000000 | 8990000000 | 4540000000 | 97690000000 | 5150000000 | 3216000000 | 72913000000 | 122070000000 | 48390000000 | 3498000000\n1652044 | ALPHABET INC. | 2024 | 2024-12-31 | 52340000000 | 52535000000 | 23466000000 | 146306000000 | 163711000000 | 89122000000 | NULL | 7363000000 | 8.13 | 8.04 | -79733000000 | 31885000000 | NULL | 19697000000 | NULL | NULL | -45536000000 | 450256000000 | NULL | 100118000000 | 125299000000 | 112390000000 | 119815000000 | 49326000000 | 350018000000 | NULL | 12211000000 | 325084000000 | 450256000000 | 125172000000 | NULL\n",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": "What was Amazon's net income in FY2024?"
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "id": "toolu_01UDrmWpmV8vojSuwsFBpHiD",
+              "caller": {
+                "type": "direct"
+              },
+              "input": {
+                "sql": "select company_name, cik, fiscal_year, period_end, net_income from analytics.fct_financials_wide where company_name ilike 'AMAZON COM%' and fiscal_year=2024"
+              },
+              "name": "run_query",
+              "type": "tool_use",
+              "toolset_name": null
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "toolu_01UDrmWpmV8vojSuwsFBpHiD",
+              "content": "{\"columns\": [\"company_name\", \"cik\", \"fiscal_year\", \"period_end\", \"net_income\"], \"rows\": [[\"AMAZON COM INC\", 1018724, 2024, \"2024-12-31\", 59248000000]], \"row_count\": 1, \"truncated\": false}"
+            }
+          ]
+        }
+      ],
+      "tools": [
+        {
+          "name": "get_schema",
+          "description": "The warehouse schema: DDL of the analytics tables, the metric list with definitions, and sample rows. The same text is already in your instructions.",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          },
+          "strict": true
+        },
+        {
+          "name": "run_query",
+          "description": "Run one read-only SELECT against the analytics schema and return {columns, rows, row_count, truncated}. At most 50 rows come back (truncated = true when more matched). On failure the error text is returned so you can fix the query; each attempt counts toward the budget.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "sql": {
+                "type": "string",
+                "description": "A single SELECT over analytics.* tables, no semicolon."
+              }
+            },
+            "required": [
+              "sql"
+            ],
+            "additionalProperties": false
+          },
+          "strict": true
+        }
+      ],
+      "tool_choice": {
+        "type": "auto",
+        "disable_parallel_tool_use": true
+      },
+      "output_config": {
+        "effort": "medium",
+        "format": {
+          "type": "json_schema",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "answer": {
+                "type": "string"
+              },
+              "caveats": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "in_scope": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "answer",
+              "caveats",
+              "in_scope"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "response": {
+      "id": "msg_011CgfSG8aDvyZ9rxNj9Vyou",
+      "container": null,
+      "content": [
+        {
+          "citations": null,
+          "text": "{\"answer\":\"AMAZON COM INC reported net income of $59.2B (exactly $59,248,000,000) for fiscal year 2024, which ended 31 December 2024.\",\"caveats\":[],\"in_scope\":true}",
+          "type": "text"
+        }
+      ],
+      "diagnostics": null,
+      "model": "claude-sonnet-5-5",
+      "role": "assistant",
+      "stop_details": null,
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "type": "message",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6473,
+        "inference_geo": "global",
+        "input_tokens": 294,
+        "output_tokens": 76,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": null,
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    }
+  }
+]

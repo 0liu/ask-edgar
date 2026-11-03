@@ -1,4 +1,4 @@
-"""Command-line interface: ``ask-edgar ask`` and ``ask-edgar load``."""
+"""Command-line interface: ``ask-edgar ask``, ``ask-edgar load`` and ``ask-edgar evals``."""
 
 import logging
 import time
@@ -9,7 +9,7 @@ import anthropic
 import psycopg
 import typer
 
-from ask_edgar import agent, db
+from ask_edgar import agent, db, evals, recorder
 from ask_edgar.etl import load_raw
 
 app = typer.Typer(
@@ -59,6 +59,49 @@ def ask(
         f"{answer.model} · {usage.input_tokens:,} in + {cached:,} cached / "
         f"{usage.output_tokens:,} out tokens · {answer.latency_ms / 1000:.1f}s"
     )
+
+
+@app.command(name="evals")
+def run_evals(
+    live: Annotated[
+        bool, typer.Option("--live", help="Call the API and re-record the cassettes.")
+    ] = False,
+    replay: Annotated[
+        bool, typer.Option("--replay", help="Serve responses from the cassettes (default).")
+    ] = False,
+    questions: Annotated[Path, typer.Option(help="Questions file.")] = evals.QUESTIONS_PATH,
+    model: Annotated[
+        str | None,
+        typer.Option(help=f"Model id (default: ${agent.MODEL_ENV} or {agent.DEFAULT_MODEL})."),
+    ] = None,
+) -> None:
+    """Score the agent on evals/questions.yaml; exit 1 below the accuracy threshold."""
+    if live and replay:
+        typer.echo("error: choose one of --live and --replay", err=True)
+        raise typer.Exit(code=2)
+    try:
+        report = evals.run(evals.load_questions(questions), live=live, model=model)
+    except recorder.CassetteMissError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+    except (
+        agent.AgentError,
+        db.ConfigError,
+        psycopg.Error,
+        anthropic.AnthropicError,
+        ValueError,
+    ) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    md, js = evals.write_results(report)
+    typer.echo(report.to_markdown())
+    typer.echo(f"written {md} and {js}")
+    if report.accuracy < evals.ACCURACY_THRESHOLD:
+        typer.echo(
+            f"error: accuracy {report.accuracy:.2f} is below {evals.ACCURACY_THRESHOLD}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
 
 @app.command()
