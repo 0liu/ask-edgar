@@ -226,11 +226,17 @@ which the evals turn into their metrics.
 
 - **CLI** — `ask-edgar ask "What was Alphabet's revenue in FY2024?"` (Typer). `--json` for
   the raw contract. Also `ask-edgar load`, `ask-edgar evals [--live|--replay]`.
-- **REST** — FastAPI, `POST /ask {"question": "..."}` → output contract; `GET /health`;
-  `GET /schema`.
-- **MCP** — stdio server (official `mcp` Python SDK) exposing `get_schema`, `run_query`
-  (same guard) and `get_metric(company, metric, fiscal_year)`. Registered in `.mcp.json`
-  so Claude Code / Claude Desktop can use the warehouse directly.
+- **REST** — FastAPI, `POST /ask {"question": "..."}` → output contract; `GET /health`
+  (checks the database, reports the model id); `GET /schema` (the agent's schema text,
+  plain text). Errors: 422 for a bad request body, 502 when the model API or its reply
+  fails, 503 when the database is unreachable or the marts are missing.
+- **MCP** — stdio server (official `mcp` Python SDK 2.x, `MCPServer`) exposing
+  `get_schema`, `run_query` (same guard; a rejected or failing query comes back as a tool
+  error with the reason) and `get_metric(company, metric, fiscal_year=2024)`, a lookup
+  on `fct_financials` by name prefix that returns the figure with its tag and filing.
+  Registered in `.mcp.json` as `uv run --env-file .env ask-edgar-mcp`, so Claude Code /
+  Claude Desktop can use the warehouse directly; `.env` must exist. The server logs to
+  stderr only.
 
 ## 7. Evals
 
