@@ -218,8 +218,9 @@ Both live in `src/ask_edgar/tools.py` so the REST API and the MCP server share t
 `in_scope = false` for refusals, with `answer` explaining what the data covers. `sql` is
 the last query that ran successfully, as the guard rewrote it (row cap applied); `null`
 when no query ran. `tool_calls` counts every tool invocation, including failed queries.
-The object also carries `model`, `usage` (input, output and cache token counts) and
-`latency_ms`, which the evals turn into cost and latency figures.
+The object also carries `first_query_ok` (whether the first `run_query` succeeded; `null`
+when none ran), `model`, `usage` (input, output and cache token counts) and `latency_ms`,
+which the evals turn into their metrics.
 
 ## 6. Interfaces
 
@@ -248,19 +249,31 @@ The object also carries `model`, `usage` (input, output and cache token counts) 
 Ground truth is **computed from the database by `oracle_sql`**, never hard-coded, so the
 set stays valid if the metric map changes. The agent never sees `oracle_sql`.
 
-Mix: 8 single-number lookups, 3 rankings/aggregations (`list`), 2 ratios computed in SQL,
-2 out-of-scope questions that must return `in_scope = false` (`refusal`).
+Mix: 8 single-number lookups, 3 rankings/aggregations (`list`), 2 ratios computed in SQL
+(`number`), 2 out-of-scope questions that must return `in_scope = false` (`refusal`).
+Every question is answerable from the CI fixture subset with the same result as from the
+full quarter, and names companies whose `ILIKE 'NAME%'` pattern matches one filer, so the
+cassettes replay identically in CI.
 
-Scoring: number → within tolerance; text → case-insensitive containment; list → set
-equality on the first column; refusal → `in_scope == false`.
+Scoring: number → a number parsed from the answer text (`$350.0B`, `37.9%`, `2.94`) is
+within `tolerance` of the first cell of the oracle result; text → case-insensitive
+containment; list → the first column of the agent's own query equals the oracle's first
+column as a set, or every expected value is named in the answer; refusal →
+`in_scope == false`.
 
-Metrics reported (Markdown table written to `evals/results/latest.md` and pasted into
-README): accuracy, SQL-valid-first-try rate, mean tool calls, mean latency, total cost
-(from usage tokens × published prices).
+Metrics reported (Markdown table written to `evals/results/latest.md`, JSON to
+`latest.json`, the table pasted into README): accuracy, SQL-valid-first-try rate, mean
+tool calls, mean latency, total cost (from usage tokens × the published prices in
+`src/ask_edgar/evals.py`; `n/a` for a model without a price entry).
 
 Modes: `--live` calls the API and **records** every request/response pair to
-`evals/cassettes/<id>.json`; `--replay` (default, used in CI) serves responses from the
-cassettes, needs no key, costs nothing. CI fails if accuracy < 0.8.
+`evals/cassettes/<id>.json` (one file per question holding the chain of calls, each keyed
+by a SHA256 of the request body: model, system, tools, messages); `--replay` (default,
+used in CI) serves responses from the cassettes (with each call's recorded latency, so the
+latency figure stays meaningful), needs no key, costs nothing, and fails loudly on an
+unknown request. Anything the model would see differently (question, prompt,
+schema text, seed, tool results, model id) changes the keys and requires a re-record.
+CI fails if accuracy < 0.8.
 
 ## 8. Quality
 
@@ -288,9 +301,10 @@ ask-edgar/
 │   ├── prompts/system.md
 │   ├── agent.py    (tool loop, output contract)
 │   ├── recorder.py (cassette record/replay around the Anthropic client)
+│   ├── evals.py    (questions, oracle truth, scoring, report)
 │   ├── cli.py  api.py  mcp_server.py
 ├── dbt/            (dbt_project.yml, models/staging, models/marts, seeds, tests)
-├── evals/          (questions.yaml, run.py, cassettes/, results/)
+├── evals/          (questions.yaml, run.py shim, cassettes/, results/)
 └── tests/          (unit/, integration/, fixtures/)
 ```
 
