@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS tag (
 -- The SEC key is (adsh, tag, version, ddate, qtrs, uom, segments, coreg). segments and
 -- coreg are NULL for consolidated facts, and 2025q1 has 14 rows that repeat the full key
 -- with different values (one filer's derivative disclosures), so there is no primary key.
--- The marts only use rows with segments IS NULL AND coreg IS NULL; staging deduplicates.
+-- The marts only use rows with segments IS NULL AND coreg IS NULL, which are unique.
 CREATE TABLE IF NOT EXISTS num (
     adsh        TEXT NOT NULL,
     tag         TEXT NOT NULL,

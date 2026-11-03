@@ -90,7 +90,8 @@ Column types follow the SEC readme (`value` as `NUMERIC`, `YYYYMMDD` dates as `D
 `accepted` as `TIMESTAMP`, 0/1 flags as `BOOLEAN`, everything else `TEXT`/`INTEGER`).
 `raw.num` has no primary key: `segments` and `coreg` are NULL for consolidated facts, and
 2025q1 contains 14 rows that repeat the full SEC key with different values (one filer's
-derivative disclosures). It carries an index on `(adsh, tag)` instead; staging dedupes.
+derivative disclosures). It carries an index on `(adsh, tag)` instead; the marts use only
+consolidated rows, which are unique on the remaining key.
 Loader: pandas reads the TSV in chunks (`chunksize=500_000`) as strings with NA inference
 off ("NA" is Namibia), re-encodes each chunk as CSV and streams it to Postgres
 `COPY ... FROM STDIN (FORMAT csv)`; empty fields load as NULL and Postgres parses the
@@ -132,26 +133,35 @@ Seeds:
   | capex | PaymentsToAcquirePropertyPlantAndEquipment | 1 |
   | dividends_paid | PaymentsOfDividends | 1 |
 
-  (Start with ~25 metrics; extend when evals show gaps.)
+  The seed holds 31 metrics over 44 tags. Each row also carries `kind`
+  (`balance | flow | per_share`), which picks the period, and a one-line `description`
+  that feeds the agent's schema text. Extend when evals show gaps.
+- `sic_codes.csv` — the SEC's SIC code list (444 codes): `sic`, `sic_description`,
+  `sec_office`.
 
 Marts (tables):
 
-- `dim_company` — one row per `cik`: `cik`, `name`, `sic`, `sic_description` (seed),
-  `state_of_incorporation`, `fiscal_year_end`, `latest_adsh`.
+- `dim_company` — one row per `cik`, described by its most recent filing in the quarter:
+  `cik`, `name`, `sic`, `sic_description` (seed), `state_of_incorporation`,
+  `fiscal_year_end`, `latest_adsh`, `latest_form`, `latest_filed`.
 - `fct_financials` (long) — one row per `(cik, fiscal_year, metric)`:
   `cik`, `company_name`, `adsh`, `form`, `fiscal_year`, `fiscal_period`, `period_end`,
   `metric`, `value`, `uom`, `source_tag`, `qtrs`.
-  Rules: `form IN ('10-K','10-K/A')`; consolidated only (`coreg IS NULL AND segments IS NULL`); balance-sheet
-  metrics use `qtrs = 0` at `ddate = period`; flow metrics use `qtrs = 4` ending at
-  `period`; when several tags map to one metric, keep the lowest `priority` present;
-  if the same filer has a 10-K and a 10-K/A for the same `fiscal_year`, keep the latest
-  `filed`.
+  Rules: `form IN ('10-K','10-K/A')`; consolidated only (`coreg IS NULL AND segments IS
+  NULL`); balance-sheet metrics use `qtrs = 0` at `ddate = period`; flow and per-share
+  metrics use `qtrs = 4` ending at `period`; per metric, the latest `filed` filing wins (a
+  10-K/A that restates replaces the 10-K, while a Part III-only amendment leaves the
+  original figures in place), then the lowest `priority` tag present in it, then a USD or
+  shares unit over any other.
 - `fct_financials_wide` (view) — one row per `(cik, fiscal_year)` with one column per
   metric. This is what the agent queries most of the time.
 
-dbt tests: `unique` + `not_null` on the grain keys; `accepted_values` on `metric`;
-`relationships` from `fct_financials.cik` to `dim_company.cik`; a singular test that
-`fct_financials_wide` has ≥ 1,000 rows for `fiscal_year = 2024`.
+dbt tests: `unique` + `not_null` on the grain keys (the composite grain of
+`fct_financials` as a singular test); `relationships` from `fct_financials.metric` to the
+`metric_map` seed (the accepted values, without a second copy of the list) and from
+`fct_financials.cik` to `dim_company.cik`; singular tests that `fct_financials_wide` has
+≥ 1,000 rows for `fiscal_year = 2024` and that each metric's `kind` agrees with its
+tags' instant/duration type in `raw.tag`.
 
 ## 5. Agent
 
