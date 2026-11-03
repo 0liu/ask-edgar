@@ -160,7 +160,8 @@ dbt tests: `unique` + `not_null` on the grain keys (the composite grain of
 `fct_financials` as a singular test); `relationships` from `fct_financials.metric` to the
 `metric_map` seed (the accepted values, without a second copy of the list) and from
 `fct_financials.cik` to `dim_company.cik`; singular tests that `fct_financials_wide` has
-≥ 1,000 rows for `fiscal_year = 2024` and that each metric's `kind` agrees with its
+≥ 1,000 rows for `fiscal_year = 2024` (the floor is `ASK_EDGAR_MIN_FY2024_COMPANIES`
+when set, so CI can run on the fixture) and that each metric's `kind` agrees with its
 tags' instant/duration type in `raw.tag`.
 
 ## 5. Agent
@@ -287,8 +288,11 @@ CI fails if accuracy < 0.8.
 - Unit tests: SQL guard (accept/reject cases), metric-map resolution, eval scorer, output
   parsing. Integration tests against Postgres (docker-compose service in CI).
 - CI (GitHub Actions): `postgres:16` service → load **fixture subset** (`tests/fixtures/`:
-  the four raw tables filtered to ~30 well-known CIKs, committed, < 2 MB) → `dbt build` →
-  `pytest` → `ask-edgar evals --replay`.
+  the four raw tables filtered to 30 well-known CIKs by `scripts/make_fixture.py`,
+  committed, < 2 MB; `num` keeps consolidated facts only, which is all the marts use) →
+  `dbt build` (with `ASK_EDGAR_MIN_FY2024_COMPANIES=15` in place of the 1,000-row floor)
+  → `pytest` → `ask-edgar evals --replay`. The eval questions and the schema sample rows
+  are chosen so the fixture gives the same answers as the full quarter.
 - No secrets in the repo. `.env.example` lists `DATABASE_URL`, `ANTHROPIC_API_KEY`.
 - Commits: conventional messages, one per phase, no trailers.
 
@@ -311,6 +315,7 @@ ask-edgar/
 │   ├── cli.py  api.py  mcp_server.py
 ├── dbt/            (dbt_project.yml, models/staging, models/marts, seeds, tests)
 ├── evals/          (questions.yaml, run.py shim, cassettes/, results/)
+├── scripts/        (make_fixture.py, sanity.sql)
 └── tests/          (unit/, integration/, fixtures/)
 ```
 
