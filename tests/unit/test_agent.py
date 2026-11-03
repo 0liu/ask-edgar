@@ -84,7 +84,7 @@ def fake_tools(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def run(responses: list[Message], **kwargs: Any) -> tuple[Answer, FakeClient]:
     client = FakeClient(responses)
-    answer = ask("What was Alphabet's revenue?", client=client, **kwargs)  # type: ignore[arg-type]
+    answer = ask("What was Alphabet's revenue?", create=client.messages.create, **kwargs)
     return answer, client
 
 
@@ -96,6 +96,7 @@ def test_query_then_answer() -> None:
     assert answer.in_scope is True
     assert answer.caveats == []
     assert answer.tool_calls == 1
+    assert answer.first_query_ok is True
     assert answer.usage.input_tokens == 300
     assert answer.usage.output_tokens == 50
     assert answer.usage.cache_read_input_tokens == 150
@@ -128,6 +129,7 @@ def test_rejected_query_goes_back_as_an_error_and_is_not_the_reported_sql() -> N
     assert error_result["content"].startswith("query rejected: relation raw.boom")
     assert answer.sql == SQL.upper() + " LIMIT 50"
     assert answer.tool_calls == 2
+    assert answer.first_query_ok is False
 
 
 def test_budget_forces_a_final_answer() -> None:
@@ -151,6 +153,7 @@ def test_refusal_is_out_of_scope() -> None:
     assert answer.in_scope is False
     assert answer.sql is None
     assert answer.caveats == ["policy"]
+    assert answer.first_query_ok is None
 
 
 def test_out_of_scope_reply_passes_through() -> None:
