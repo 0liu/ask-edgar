@@ -53,10 +53,11 @@ def ask(
     if answer.sql:
         typer.echo(f"\nsql:\n{answer.sql}")
     usage = answer.usage
+    cached = usage.cache_read_input_tokens + usage.cache_creation_input_tokens
     typer.echo(
         f"\n{answer.tool_calls} tool call{'' if answer.tool_calls == 1 else 's'} · "
-        f"{answer.model} · {usage.input_tokens:,} in / {usage.output_tokens:,} out tokens · "
-        f"{answer.latency_ms / 1000:.1f}s"
+        f"{answer.model} · {usage.input_tokens:,} in + {cached:,} cached / "
+        f"{usage.output_tokens:,} out tokens · {answer.latency_ms / 1000:.1f}s"
     )
 
 
