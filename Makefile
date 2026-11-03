@@ -3,7 +3,7 @@
 -include .env
 export
 
-.PHONY: up down data load dbt sanity check evals evals-live api mcp
+.PHONY: up down data load fixture dbt sanity check evals evals-live api mcp
 
 up:
 	docker compose up -d --wait
@@ -20,6 +20,9 @@ data:
 
 load:
 	uv run ask-edgar load
+
+fixture:
+	uv run python scripts/make_fixture.py
 
 dbt:
 	cd dbt && uv run dbt build

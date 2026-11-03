@@ -43,7 +43,7 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install dependencies (Python from .python-version, versions from uv.lock)
+      - name: Install dependencies (Python 3.13 and the versions in uv.lock)
         run: uv sync --locked
 
       - name: Load the fixture subset into schema raw
