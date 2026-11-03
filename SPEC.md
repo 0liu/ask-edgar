@@ -44,7 +44,7 @@ reliable; the agent, guard and evals are independent of the dataset.
 
 Example questions (all answerable from the mart):
 
-1. What was Apple's total revenue in fiscal year 2024?
+1. What was Alphabet's total revenue in fiscal year 2024?
 2. Which company had the highest net income in FY2024?
 3. List the five largest companies by total assets.
 4. What was Microsoft's diluted EPS in FY2024?
@@ -69,9 +69,12 @@ figures (10-Q), anything before the loaded quarter's filings.
 ### 4.1 Source
 
 SEC Financial Statement Data Sets, quarter **2025q1** (filings submitted Jan–Mar 2025,
-which is when most calendar-year 10-Ks arrive).
+which is when most calendar-year 10-Ks arrive). Filers whose 10-K lands outside that window
+are absent, e.g. Apple (September year-end, 10-K in 2024q4) and Microsoft (June, 2024q3).
 Download: `https://www.sec.gov/files/dera/data/financial-statement-data-sets/2025q1.zip`
-Contents: `sub.txt`, `num.txt`, `tag.txt`, `pre.txt`, `readme.htm`. Tab-separated, UTF-8.
+Contents: `sub.txt`, `num.txt`, `tag.txt`, `pre.txt`, `readme.htm`. Tab-separated, UTF-8,
+with CSV-style double quotes around fields that contain a tab, comma or quote (inner quotes
+doubled).
 The zip is **not** committed. `make data` expects it at `data/raw/2025q1.zip`.
 
 ### 4.2 Raw layer (schema `raw`) — data loaded as-is with `COPY`
@@ -79,13 +82,20 @@ The zip is **not** committed. `make data` expects it at `data/raw/2025q1.zip`.
 | table | grain | key columns |
 |---|---|---|
 | `raw.sub` | one submission (filing) | `adsh` (PK), `cik`, `name`, `sic`, `form`, `period`, `fy`, `fp`, `fye`, `filed` |
-| `raw.num` | one reported number | `adsh, tag, version, ddate, qtrs, uom, coreg` (composite PK) → `value` |
+| `raw.num` | one reported number | SEC key `adsh, tag, version, ddate, qtrs, uom, segments, coreg` (not unique, see below) → `value` |
 | `raw.tag` | one XBRL tag definition | `tag, version` (PK) → `custom`, `abstract`, `datatype`, `iord`, `crdr`, `tlabel` |
 | `raw.pre` | one line on one statement | `adsh, report, line` (PK) → `stmt`, `tag`, `version`, `plabel` |
 
-Column types follow the SEC readme (numeric `value`, date `ddate`/`period`/`filed` as
-`YYYYMMDD` → `date`). Loader: pandas reads the TSV in chunks (`chunksize=500_000`),
-casts, and streams each chunk to Postgres `COPY ... FROM STDIN`; memory stays flat
+Column types follow the SEC readme (`value` as `NUMERIC`, `YYYYMMDD` dates as `DATE`,
+`accepted` as `TIMESTAMP`, 0/1 flags as `BOOLEAN`, everything else `TEXT`/`INTEGER`).
+`raw.num` has no primary key: `segments` and `coreg` are NULL for consolidated facts, and
+2025q1 contains 14 rows that repeat the full SEC key with different values (one filer's
+derivative disclosures). It carries an index on `(adsh, tag)` instead; staging dedupes.
+Loader: pandas reads the TSV in chunks (`chunksize=500_000`) as strings with NA inference
+off ("NA" is Namibia), re-encodes each chunk as CSV and streams it to Postgres
+`COPY ... FROM STDIN (FORMAT csv)`; empty fields load as NULL and Postgres parses the
+dates and numerics itself (`value` has up to 19 significant digits, more than a float
+holds). One transaction, truncate first, so a load is idempotent; memory stays flat
 regardless of file size. Target: full quarter loads in < 5 min on a laptop.
 
 ### 4.3 Modelled layer (dbt, schema `analytics`)
@@ -131,7 +141,7 @@ Marts (tables):
 - `fct_financials` (long) — one row per `(cik, fiscal_year, metric)`:
   `cik`, `company_name`, `adsh`, `form`, `fiscal_year`, `fiscal_period`, `period_end`,
   `metric`, `value`, `uom`, `source_tag`, `qtrs`.
-  Rules: `form IN ('10-K','10-K/A')`; consolidated only (`coreg IS NULL`); balance-sheet
+  Rules: `form IN ('10-K','10-K/A')`; consolidated only (`coreg IS NULL AND segments IS NULL`); balance-sheet
   metrics use `qtrs = 0` at `ddate = period`; flow metrics use `qtrs = 4` ending at
   `period`; when several tags map to one metric, keep the lowest `priority` present;
   if the same filer has a 10-K and a 10-K/A for the same `fiscal_year`, keep the latest
@@ -175,7 +185,7 @@ for out-of-scope questions.
 ### 5.4 Output contract
 
 ```json
-{"answer": "Apple's FY2024 revenue was $391.0B.", "sql": "SELECT ...", "caveats": ["..."],
+{"answer": "Alphabet's FY2024 revenue was $350.0B.", "sql": "SELECT ...", "caveats": ["..."],
  "in_scope": true, "tool_calls": 2}
 ```
 
@@ -183,7 +193,7 @@ for out-of-scope questions.
 
 ## 6. Interfaces
 
-- **CLI** — `ask-edgar ask "What was Apple's revenue in FY2024?"` (Typer). `--json` for
+- **CLI** — `ask-edgar ask "What was Alphabet's revenue in FY2024?"` (Typer). `--json` for
   the raw contract. Also `ask-edgar load`, `ask-edgar evals [--live|--replay]`.
 - **REST** — FastAPI, `POST /ask {"question": "..."}` → output contract; `GET /health`;
   `GET /schema`.
@@ -197,11 +207,11 @@ for out-of-scope questions.
 
 ```yaml
 - id: q01
-  question: What was Apple's total revenue in fiscal year 2024?
+  question: What was Alphabet's total revenue in fiscal year 2024?
   answer_type: number          # number | text | list | refusal
   oracle_sql: >
     SELECT revenue FROM analytics.fct_financials_wide
-    WHERE company_name ILIKE 'APPLE INC%' AND fiscal_year = 2024
+    WHERE company_name ILIKE 'ALPHABET INC%' AND fiscal_year = 2024
   tolerance: 0.01              # relative, numbers only
 ```
 
@@ -258,7 +268,7 @@ ask-edgar/
 |---|---|---|
 | 0 | bootstrap | `make up` starts Postgres; `make check` (ruff+mypy+pytest) is green on an empty project |
 | 1 | raw load | `ask-edgar load` loads 2025q1 in < 5 min; row counts printed |
-| 2 | marts | `dbt build` green; `SELECT revenue FROM fct_financials_wide WHERE company_name ILIKE 'APPLE INC%' AND fiscal_year=2024` returns ~391e9 |
+| 2 | marts | `dbt build` green; `SELECT revenue FROM fct_financials_wide WHERE company_name ILIKE 'ALPHABET INC%' AND fiscal_year=2024` returns ~350e9 |
 | 3 | agent + CLI | the 8 example questions answer correctly by hand |
 | 4 | evals | `ask-edgar evals --live` ≥ 0.8; cassettes recorded; `--replay` reproduces |
 | 5 | REST + MCP | `curl POST /ask` works; MCP server listed by `claude mcp list` and callable |
