@@ -1,5 +1,5 @@
-# CI: lint, type-check and test against a throwaway Postgres (SPEC §8).
-# Phase 6 adds, after `make check`: `ask-edgar load --fixture`, `make dbt`, `make evals`.
+# CI (SPEC §8): a throwaway Postgres, the 30-company fixture, the dbt marts, then lint,
+# type-check, tests and the evals replayed from cassettes. No API key is needed.
 name: ci
 
 on:
@@ -33,6 +33,8 @@ jobs:
 
     env:
       DATABASE_URL: postgresql://edgar:edgar@localhost:5432/edgar
+      # The fixture has about 20 companies with a FY2024 10-K; the full quarter has 4,000+.
+      ASK_EDGAR_MIN_FY2024_COMPANIES: "15"
 
     steps:
       - uses: actions/checkout@v4
@@ -44,5 +46,14 @@ jobs:
       - name: Install dependencies (Python from .python-version, versions from uv.lock)
         run: uv sync --locked
 
+      - name: Load the fixture subset into schema raw
+        run: uv run ask-edgar load --fixture
+
+      - name: dbt build (seeds, staging, marts, tests)
+        run: make dbt
+
       - name: ruff, mypy --strict, pytest
         run: make check
+
+      - name: evals, replayed from the cassettes
+        run: make evals
