@@ -1,0 +1,21 @@
+# never committed (see CLAUDE.md)
+data/
+.env
+evals/results/*
+!evals/results/latest.md
+
+# dbt
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/
+
+# python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

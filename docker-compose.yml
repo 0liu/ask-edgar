@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: ask-edgar-postgres
+    environment:
+      POSTGRES_DB: edgar
+      POSTGRES_USER: edgar
+      POSTGRES_PASSWORD: edgar
+    # Host port comes from POSTGRES_PORT in .env (default 5432); keep DATABASE_URL in sync.
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U edgar -d edgar"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:
