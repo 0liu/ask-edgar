@@ -167,30 +167,46 @@ tags' instant/duration type in `raw.tag`.
 
 ### 5.1 Model and loop
 
-Anthropic Messages API with tool use (`claude-sonnet-4-5` by default; configurable).
-Max **5** tool calls per question, then a forced final answer. Temperature 0.
+Anthropic Messages API with tool use (`claude-sonnet-5-5` by default; `ASK_EDGAR_MODEL`
+or `--model` overrides). Max **5** tool calls per question, then a forced final answer
+(`tool_choice: none`). Current models reject sampling parameters, so there is no
+temperature; the model runs with adaptive thinking at medium effort, and determinism for
+the evals comes from the record/replay cassettes (§7). The final reply is a
+structured-output JSON object (`answer`, `caveats`, `in_scope`), so the contract never
+depends on parsing prose.
 
-System prompt states: the scope (annual 10-K financials from SEC FSDS 2025q1, fiscal
-years mostly 2024 and 2023), the tables and metrics available, the rule "query before you
-answer; never state a number you did not read from a query result", and the refusal rule
-for out-of-scope questions.
+System prompt (`src/ask_edgar/prompts/system.md`, with the `get_schema` text appended)
+states: the scope (annual 10-K financials from SEC FSDS 2025q1, fiscal years mostly 2024
+and 2023), the tables and metrics available, the rule "query before you answer; never
+state a number you did not read from a query result", and the refusal rule for
+out-of-scope questions.
 
 ### 5.2 Tools
 
 | tool | input | output | notes |
 |---|---|---|---|
-| `get_schema` | — | DDL of `analytics.dim_company`, `fct_financials`, `fct_financials_wide`; the metric list with one-line definitions; 3 sample rows of the wide view | cached per process |
-| `run_query` | `sql: str` | `{columns, rows, row_count, truncated}` | read-only guard (5.3) |
+| `get_schema` | — | DDL of `analytics.dim_company`, `fct_financials`, `fct_financials_wide` (from `information_schema`, with column notes); the metric list with one-line definitions and tags (from the seed); 3 sample rows of the wide view (Alphabet, Amazon, Tesla, FY2024: present in the full quarter and in the CI fixture, so the text is identical in both) | cached per process; the same text is in the system prompt |
+| `run_query` | `sql: str` | `{columns, rows, row_count, truncated}` | read-only guard (5.3); numerics come back as JSON numbers, dates as ISO strings |
+
+Both live in `src/ask_edgar/tools.py` so the REST API and the MCP server share them.
 
 ### 5.3 SQL guard (enforced in code, not by prompt)
 
-- Parse with `sqlglot`; reject anything that is not a single `SELECT` (no `;`, no CTE
-  that writes, no `INTO`).
-- Allow only `analytics.*` relations (and CTE names defined in the query).
-- Execute in a transaction with `SET TRANSACTION READ ONLY`, `statement_timeout = 5000`.
-- Append `LIMIT 50` when absent; `truncated = true` when hit.
-- Return the Postgres error text to the model on failure so it can repair the query
-  (counts toward the 5-call budget).
+- Parse with `sqlglot` (Postgres dialect); reject anything that is not a single `SELECT`
+  or set operation (no `;`, no CTE or subquery that writes, no `INTO`, no `FOR UPDATE`).
+- Allow only `analytics.*` relations (and CTE names defined in the query). Unqualified
+  names, other schemas, database-qualified names and table functions are rejected with a
+  message that tells the model to write `analytics.<table>`.
+- Refuse functions a `READ ONLY` transaction does not stop: `pg_sleep`, file readers
+  (`pg_read_file`, `pg_ls_dir`, ...), large objects, `dblink`, backend control
+  (`pg_terminate_backend`, ...), `set_config`. A backstop; a SELECT-only role is the real
+  fix and is listed under limitations.
+- Execute the regenerated statement in a transaction with `SET TRANSACTION READ ONLY`,
+  `statement_timeout = 5000`.
+- Cap rows: an absent `LIMIT`, or one above 50, becomes `LIMIT 50` (the statement shown
+  to the user); the executed statement asks for 51 rows so `truncated = true` is exact.
+- Return the guard's or Postgres's error text to the model on failure so it can repair
+  the query (counts toward the 5-call budget).
 
 ### 5.4 Output contract
 
@@ -199,7 +215,11 @@ for out-of-scope questions.
  "in_scope": true, "tool_calls": 2}
 ```
 
-`in_scope = false` for refusals, with `answer` explaining what the data covers.
+`in_scope = false` for refusals, with `answer` explaining what the data covers. `sql` is
+the last query that ran successfully, as the guard rewrote it (row cap applied); `null`
+when no query ran. `tool_calls` counts every tool invocation, including failed queries.
+The object also carries `model`, `usage` (input, output and cache token counts) and
+`latency_ms`, which the evals turn into cost and latency figures.
 
 ## 6. Interfaces
 
@@ -264,7 +284,9 @@ ask-edgar/
 │   ├── etl/        (download check, unzip, load_raw.py)
 │   ├── db.py       (connection, read-only session)
 │   ├── guard.py    (SQL guard)
-│   ├── agent.py    (tool loop, prompt, output contract)
+│   ├── tools.py    (get_schema, run_query: shared by agent, API and MCP)
+│   ├── prompts/system.md
+│   ├── agent.py    (tool loop, output contract)
 │   ├── recorder.py (cassette record/replay around the Anthropic client)
 │   ├── cli.py  api.py  mcp_server.py
 ├── dbt/            (dbt_project.yml, models/staging, models/marts, seeds, tests)
@@ -287,5 +309,6 @@ ask-edgar/
 
 ## 11. Open questions
 
-- Model choice for the agent (Sonnet is the default; Haiku for cost if accuracy holds).
+- Model choice for the agent (Sonnet 5.5 is the default; Haiku 5.5 for cost if accuracy
+  holds). Effort is fixed at medium; worth a sweep once the evals exist.
 - Whether `fct_financials_wide` should also carry FY2023 columns for YoY questions (one more dbt model).
